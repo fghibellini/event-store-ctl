@@ -1,4 +1,12 @@
 
+<div align="center">
+  <img src="https://eventstore.org/images/ouro-full.svg" width="100">
+</div>
+
+&nbsp;
+&nbsp;
+&nbsp;
+
 ```
 event-store-ctl - Event Store CLI
 
