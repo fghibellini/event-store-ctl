@@ -1,0 +1,22 @@
+Name:            event-store-ctl
+Version:         0.0
+Cabal-Version:   >= 1.8
+License:         MIT
+Author:          Filippo Ghibellini
+Synopsis:        CLI utility to interface with event-store
+Build-Type:      Simple
+
+Executable event-store-ctl
+  Main-Is:         Main.hs
+  Hs-Source-Dirs:  exe
+  Ghc-Options:     -Wall
+  Build-Depends:   base
+                 , eventstore
+                 , streaming
+                 , mtl
+                 , transformers
+                 , text
+                 , aeson
+                 , aeson-pretty
+                 , bytestring
+                 , optparse-applicative
