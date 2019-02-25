@@ -20,3 +20,5 @@ Executable event-store-ctl
                  , aeson-pretty
                  , bytestring
                  , optparse-applicative
+                 , async
+  other-modules: Streams

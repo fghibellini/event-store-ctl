@@ -23,4 +23,34 @@ Available options:
 
 Available commands:
   subscribe                Subscribe to a stream
+  list-streams             List most recent streams
+```
+
+## Commands
+
+### `subscribe`
+
+```
+Usage: event-store-ctl subscribe STREAM_NAME
+  Subscribe to a stream
+
+Available options:
+  -h,--help                Show this help text
+  STREAM_NAME              Name of stream to subscribe to
+```
+
+### `list-streams`
+
+```
+Usage: event-store-ctl list-streams [-N NUMBER] [-a|--all] [-u|--updated]
+  List most recent streams
+
+Available options:
+  -h,--help                Show this help text
+  -N NUMBER                Maximum number of stream names to
+                           output (default: 20)
+  -a,--all                 Display all streams, not just the ones that were
+                           recently created
+  -u,--updated             Display updated streams, i.e. those with an event
+                           with event number > 0
 ```
