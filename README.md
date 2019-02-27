@@ -31,12 +31,18 @@ Available commands:
 ### `subscribe`
 
 ```
-Usage: event-store-ctl subscribe STREAM_NAME
+Usage: event-store-ctl subscribe STREAM_NAME (-e|--from-event EVENT_NUMBER)
+                                 (-c|--chunk-size EVENT_COUNT)
   Subscribe to a stream
 
 Available options:
   -h,--help                Show this help text
   STREAM_NAME              Name of stream to subscribe to
+  -e,--from-event EVENT_NUMBER
+                           this will create a catch-up subscription starting
+                           from the event-number passed
+  -c,--chunk-size EVENT_COUNT
+                           how many events to fetch at a time
 ```
 
 ### `list-streams`

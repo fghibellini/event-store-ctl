@@ -1,22 +1,25 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GADTs #-}
+-- {-# LANGUAGE FlexibleContexts #-}
 
-import Database.EventStore (connect, defaultSettings, Settings(s_defaultUserCredentials), credentials, ConnectionType(Static), StreamId(StreamName), ResolveLink(ResolveLink, NoResolveLink), ResolvedEvent(resolvedEventRecord), RecordedEvent(recordedEventNumber, recordedEventId, recordedEventType, recordedEventData, recordedEventStreamId), positionEnd, streamEnd, s_loggerType, s_loggerFilter, LogLevel(LevelDebug), LoggerFilter(LoggerLevel), LogType(LogStderr), keepRetrying, s_retry, subscribe, nextEvent, Connection, readEventsBackward, ReadResult(ReadSuccess, ReadSuccess, ReadNoStream, ReadStreamDeleted, ReadNotModified, ReadError, ReadAccessDenied), Slice(Slice, SliceEndOfStream))
+import Database.EventStore (connect, defaultSettings, Settings(s_defaultUserCredentials), credentials, ConnectionType(Static), StreamId(StreamName), ResolveLink(ResolveLink, NoResolveLink), ResolvedEvent(resolvedEventRecord), RecordedEvent(recordedEventNumber, recordedEventId, recordedEventType, recordedEventData, recordedEventStreamId), positionEnd, streamEnd, s_loggerType, s_loggerFilter, LogLevel(LevelDebug), LoggerFilter(LoggerLevel), LogType(LogStderr), keepRetrying, s_retry, subscribe, nextEvent, Connection, readEventsBackward, ReadResult(ReadSuccess, ReadSuccess, ReadNoStream, ReadStreamDeleted, ReadNotModified, ReadError, ReadAccessDenied), Slice(Slice, SliceEndOfStream), subscribeFrom, eventNumber, Subscription, EventNumber)
+import Numeric.Natural (Natural)
+import Data.Int (Int32)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8)
 import Data.Monoid ((<>))
-import Control.Monad (forever, when, mapM_)
+import Control.Monad (forever, when, mapM_, void)
 import Data.Aeson (decode, Value)
 import Data.Aeson.Encode.Pretty (encodePretty)
 import Data.Maybe (fromMaybe)
 import Data.ByteString.Lazy (toStrict, fromStrict)
-import Options.Applicative (ParserInfo, Parser, subparser, command, info, progDesc, helper, (<**>), fullDesc, header, execParser, strOption, long, metavar, help, argument, str, showDefault, value, option, switch, auto, short)
+import Options.Applicative (ParserInfo, Parser, subparser, command, info, progDesc, helper, (<**>), fullDesc, header, execParser, strOption, long, metavar, help, argument, str, showDefault, value, option, switch, auto, short, optional)
 import Streams (getActiveStreams, getNewStreams, getModifiedStreams)
 
 
-data SubscribeArgs = SubscribeArgs { streamName :: Text }
+data SubscribeArgs = SubscribeArgs { streamName :: Text, fromEvent :: Maybe Natural, chunkSize :: Maybe Int32 }
 data WhichStreams = AllStreams | NewStreams | UpdatedStreams
 data ListStreamsArgs = ListStreamsArgs { count :: Int, showAll :: Bool, updated :: Bool }
 
@@ -25,9 +28,20 @@ data CmdArgs
     | ListStreams ListStreamsArgs
 
 subscribeParser :: Parser CmdArgs
-subscribeParser = Subscribe <$> SubscribeArgs <$> argument str
+subscribeParser = Subscribe <$> (SubscribeArgs
+      <$> argument str
           ( metavar "STREAM_NAME"
          <> help "Name of stream to subscribe to" )
+      <*> option (optional auto)
+          ( short 'e'
+         <> long "from-event"
+         <> metavar "EVENT_NUMBER"
+         <> help "this will create a catch-up subscription starting from the event-number passed" )
+      <*> option (optional auto)
+          ( short 'c'
+         <> long "chunk-size"
+         <> metavar "EVENT_COUNT"
+         <> help "how many events to fetch at a time" ))
 
 listStreamsParser :: Parser CmdArgs
 listStreamsParser = ListStreams <$> (ListStreamsArgs
@@ -113,23 +127,33 @@ main = do
 
 
 runSubscribe :: Connection -> Bool -> Bool -> SubscribeArgs -> IO ()
-runSubscribe conn verbse ptty args = do
+runSubscribe conn verbse ptty args =
 
-    sub <- subscribe
+    case fromEvent args of
+        Just e -> withSub =<< subscribeFrom
+              conn
+              (StreamName (streamName args))
+              ResolveLink
+              (Just $ eventNumber e)
+              (chunkSize args)
+              Nothing
+        Nothing -> withSub =<< subscribe
               conn
               (StreamName (streamName args))
               ResolveLink
               Nothing
 
-    let handleEvent (evt :: ResolvedEvent) = do
-        let (Just re) = resolvedEventRecord evt
-        putStrLn $ "Event<" <> (T.unpack $ recordedEventType $ re) <> "> #" <> (show $ recordedEventId re)
-        logRecordedEvent ptty re
-        putStrLn $ ""
+    where
+        withSub :: Subscription s => s -> IO ()
+        withSub sub = do
+            let handleEvent (evt :: ResolvedEvent) = do
+                let (Just re) = resolvedEventRecord evt
+                putStrLn $ "Event<" <> (T.unpack $ recordedEventType $ re) <> "> #" <> (show $ recordedEventId re)
+                logRecordedEvent ptty re
+                putStrLn $ ""
 
-    when verbse $ putStrLn $ "Subscribing to stream: " <> (T.unpack $ streamName args)
-    _ <- forever $ nextEvent sub >>= handleEvent
-    pure ()
+            when verbse $ putStrLn $ "Subscribing to stream: " <> (T.unpack $ streamName args)
+            void $ forever $ nextEvent sub >>= handleEvent
 
 runListStreams :: Connection -> ListStreamsArgs -> IO ()
 runListStreams conn args = case (showAll args, updated args) of
