@@ -1,9 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GADTs #-}
--- {-# LANGUAGE FlexibleContexts #-}
 
-import Database.EventStore (connect, defaultSettings, Settings(s_defaultUserCredentials), credentials, ConnectionType(Static), StreamId(StreamName), ResolveLink(ResolveLink, NoResolveLink), ResolvedEvent(resolvedEventRecord), RecordedEvent(recordedEventNumber, recordedEventId, recordedEventType, recordedEventData, recordedEventStreamId), positionEnd, streamEnd, s_loggerType, s_loggerFilter, LogLevel(LevelDebug), LoggerFilter(LoggerLevel), LogType(LogStderr), keepRetrying, s_retry, subscribe, nextEvent, Connection, readEventsBackward, ReadResult(ReadSuccess, ReadSuccess, ReadNoStream, ReadStreamDeleted, ReadNotModified, ReadError, ReadAccessDenied), Slice(Slice, SliceEndOfStream), subscribeFrom, eventNumber, Subscription, EventNumber)
+import Database.EventStore (connect, defaultSettings, Settings(s_defaultUserCredentials), credentials, ConnectionType(Static), StreamId(StreamName), ResolveLink(ResolveLink, NoResolveLink), ResolvedEvent(resolvedEventRecord), RecordedEvent(recordedEventNumber, recordedEventId, recordedEventType, recordedEventData, recordedEventStreamId), positionEnd, streamEnd, s_loggerType, s_loggerFilter, LogLevel(LevelDebug), LoggerFilter(LoggerLevel), LogType(LogStderr), keepRetrying, s_retry, subscribe, nextEvent, Connection, readEventsBackward, ReadResult(ReadSuccess, ReadSuccess, ReadNoStream, ReadStreamDeleted, ReadNotModified, ReadError, ReadAccessDenied), Slice(Slice, SliceEndOfStream), subscribeFrom, eventNumber, Subscription, EventNumber, sendEvent, anyVersion, createEvent, EventType(UserDefined), withJson)
 import Numeric.Natural (Natural)
 import Data.Int (Int32)
 import Data.Text (Text)
@@ -17,15 +16,16 @@ import Data.Maybe (fromMaybe)
 import Data.ByteString.Lazy (toStrict, fromStrict)
 import Options.Applicative (ParserInfo, Parser, subparser, command, info, progDesc, helper, (<**>), fullDesc, header, execParser, strOption, long, metavar, help, argument, str, showDefault, value, option, switch, auto, short, optional)
 import Streams (getActiveStreams, getNewStreams, getModifiedStreams)
+import Control.Concurrent.Async (wait)
 
-
-data SubscribeArgs = SubscribeArgs { streamName :: Text, fromEvent :: Maybe Natural, chunkSize :: Maybe Int32 }
-data WhichStreams = AllStreams | NewStreams | UpdatedStreams
-data ListStreamsArgs = ListStreamsArgs { count :: Int, showAll :: Bool, updated :: Bool }
+data SubscribeArgs = SubscribeArgs { subscribeArgsStreamName :: Text, subscribeArgsFromEvent :: Maybe Natural, subscribeArgsChunkSize :: Maybe Int32 }
+data ListStreamsArgs = ListStreamsArgs { listStreamArgsCount :: Int, listStreamsShowAll :: Bool, listStreamsUpdated :: Bool }
+data SendEventArgs = SendEventArgs { sendEventArgsStreamName :: Text, sendEventArgsEventType :: Text, sendEventArgsEventData :: Text }
 
 data CmdArgs
     = Subscribe SubscribeArgs
     | ListStreams ListStreamsArgs
+    | SendEvent SendEventArgs
 
 subscribeParser :: Parser CmdArgs
 subscribeParser = Subscribe <$> (SubscribeArgs
@@ -57,13 +57,26 @@ listStreamsParser = ListStreams <$> (ListStreamsArgs
          <> help "Display all streams, not just the ones that were recently created" )
      <*> switch
           ( short 'u'
-         <> long "updated"
-         <> help "Display updated streams, i.e. those with an event with event number > 0" ))
+         <> long "listStreamsUpdated"
+         <> help "Display listStreamsUpdated streams, i.e. those with an event with event number > 0" ))
+
+createEventParser :: Parser CmdArgs
+createEventParser = SendEvent <$> (SendEventArgs
+     <$> argument str
+          ( metavar "STREAM_NAME"
+         <> help "Name of stream to send the event to" )
+     <*> argument str
+          ( metavar "EVENT_TYPE"
+         <> help "Event type" )
+     <*> argument str
+          ( metavar "DATA"
+         <> help "Event data" ))
 
 cmdArgsParser :: Parser CmdArgs
 cmdArgsParser = subparser
     (  (command "subscribe" (info (helper <*> subscribeParser) (progDesc "Subscribe to a stream")))
-    <> (command "list-streams" (info (helper <*> listStreamsParser) (progDesc "List most recent streams"))))
+    <> (command "list-streams" (info (helper <*> listStreamsParser) (progDesc "List most recent streams")))
+    <> (command "send-event" (info (helper <*> createEventParser) (progDesc "Creates an event"))))
 
 data Opts
     = Opts
@@ -124,22 +137,23 @@ main = do
     case cmdArgs opts of
         Subscribe args -> runSubscribe conn (verbose opts) (pretty opts) args
         ListStreams args -> runListStreams conn args
+        SendEvent args -> runSendEvent conn args
 
 
 runSubscribe :: Connection -> Bool -> Bool -> SubscribeArgs -> IO ()
 runSubscribe conn verbse ptty args =
 
-    case fromEvent args of
+    case subscribeArgsFromEvent args of
         Just e -> withSub =<< subscribeFrom
               conn
-              (StreamName (streamName args))
+              (StreamName (subscribeArgsStreamName args))
               ResolveLink
               (Just $ eventNumber e)
-              (chunkSize args)
+              (subscribeArgsChunkSize args)
               Nothing
         Nothing -> withSub =<< subscribe
               conn
-              (StreamName (streamName args))
+              (StreamName (subscribeArgsStreamName args))
               ResolveLink
               Nothing
 
@@ -152,15 +166,32 @@ runSubscribe conn verbse ptty args =
                 logRecordedEvent ptty re
                 putStrLn $ ""
 
-            when verbse $ putStrLn $ "Subscribing to stream: " <> (T.unpack $ streamName args)
+            when verbse $ putStrLn $ "Subscribing to stream: " <> (T.unpack $ subscribeArgsStreamName args)
             void $ forever $ nextEvent sub >>= handleEvent
 
 runListStreams :: Connection -> ListStreamsArgs -> IO ()
-runListStreams conn args = case (showAll args, updated args) of
-    (True, True)   -> error "--all and --updated cannot be supplied together"
-    (True, False)  -> getActiveStreams conn (count args)   >>= mapM_ (putStrLn . T.unpack)
-    (False, True)  -> getModifiedStreams conn (count args) >>= mapM_ (putStrLn . T.unpack)
-    (False, False) -> getNewStreams conn (count args)      >>= mapM_ (putStrLn . T.unpack)
+runListStreams conn args = case (listStreamsShowAll args, listStreamsUpdated args) of
+    (True, True)   -> error "--all and --listStreamsUpdated cannot be supplied together"
+    (True, False)  -> getActiveStreams conn (listStreamArgsCount args)   >>= mapM_ (putStrLn . T.unpack)
+    (False, True)  -> getModifiedStreams conn (listStreamArgsCount args) >>= mapM_ (putStrLn . T.unpack)
+    (False, False) -> getNewStreams conn (listStreamArgsCount args)      >>= mapM_ (putStrLn . T.unpack)
+
+runSendEvent :: Connection -> SendEventArgs -> IO ()
+runSendEvent conn args = do
+    let evt = createEvent
+                  (UserDefined $ sendEventArgsEventType args)
+                  Nothing
+                  (withJson $ sendEventArgsEventData args)
+
+    wr <- wait =<< sendEvent
+                      conn
+                      (StreamName $ sendEventArgsStreamName args)
+                      anyVersion
+                      evt
+                      Nothing
+
+    print wr
+
 
 logRecordedEvent :: Bool -> RecordedEvent -> IO ()
 logRecordedEvent ptty re = if ptty then logPretty else logCondensed

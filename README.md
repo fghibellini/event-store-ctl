@@ -24,6 +24,7 @@ Available options:
 Available commands:
   subscribe                Subscribe to a stream
   list-streams             List most recent streams
+  send-event               Creates an event
 ```
 
 ## Commands
@@ -59,4 +60,17 @@ Available options:
                            recently created
   -u,--updated             Display updated streams, i.e. those with an event
                            with event number > 0
+```
+
+### `send-event`
+
+```
+Usage: event-store-ctl send-event STREAM_NAME EVENT_TYPE DATA
+  Creates an event
+
+Available options:
+  -h,--help                Show this help text
+  STREAM_NAME              Name of stream to send the event to
+  EVENT_TYPE               Event type
+  DATA                     Event data
 ```
