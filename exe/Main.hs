@@ -32,16 +32,16 @@ subscribeParser = Subscribe <$> (SubscribeArgs
       <$> argument str
           ( metavar "STREAM_NAME"
          <> help "Name of stream to subscribe to" )
-      <*> option (optional auto)
+      <*> (optional $ option auto
           ( short 'e'
          <> long "from-event"
          <> metavar "EVENT_NUMBER"
-         <> help "this will create a catch-up subscription starting from the event-number passed" )
-      <*> option (optional auto)
+         <> help "this will create a catch-up subscription starting from the event-number passed" ))
+      <*> (optional $ option auto
           ( short 'c'
          <> long "chunk-size"
          <> metavar "EVENT_COUNT"
-         <> help "how many events to fetch at a time" ))
+         <> help "how many events to fetch at a time" )))
 
 listStreamsParser :: Parser CmdArgs
 listStreamsParser = ListStreams <$> (ListStreamsArgs
