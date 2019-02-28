@@ -21,4 +21,6 @@ Executable event-store-ctl
                  , bytestring
                  , optparse-applicative
                  , async
+                 , streaming-bytestring
+                 , streaming-utils
   other-modules: Streams

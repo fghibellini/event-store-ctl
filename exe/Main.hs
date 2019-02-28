@@ -18,15 +18,24 @@ import Data.ByteString.Lazy (toStrict, fromStrict)
 import Options.Applicative (ParserInfo, Parser, subparser, command, info, progDesc, helper, (<**>), fullDesc, header, execParser, strOption, long, metavar, help, argument, str, showDefault, value, option, switch, auto, short, optional)
 import Streams (getActiveStreams, getNewStreams, getModifiedStreams)
 import Control.Concurrent.Async (wait)
+import GHC.IO.Handle.FD (stdin)
+import GHC.IO.Handle (hSetBinaryMode)
+import qualified Data.ByteString.Streaming as BSS
+import qualified Data.ByteString.Streaming.Aeson as AES
+--import Data.Functor.Of (Of((:>)))
+import Streaming.Prelude (Of((:>)))
+import Streaming (iterT)
 
 data SubscribeArgs = SubscribeArgs { subscribeArgsStreamName :: Text, subscribeArgsFromEvent :: Maybe Natural, subscribeArgsChunkSize :: Maybe Int32 }
 data ListStreamsArgs = ListStreamsArgs { listStreamArgsCount :: Int, listStreamsShowAll :: Bool, listStreamsUpdated :: Bool }
 data SendEventArgs = SendEventArgs { sendEventArgsStreamName :: Text, sendEventArgsEventType :: Text, sendEventArgsJsonData :: Maybe ByteString, sendEventArgsBinaryData :: Maybe ByteString }
+data SendEventsArgs = SendEventsArgs
 
 data CmdArgs
     = Subscribe SubscribeArgs
     | ListStreams ListStreamsArgs
     | SendEvent SendEventArgs
+    | SendEvents SendEventsArgs
 
 subscribeParser :: Parser CmdArgs
 subscribeParser = Subscribe <$> (SubscribeArgs
@@ -80,11 +89,15 @@ createEventParser = SendEvent <$> (SendEventArgs
          <> metavar "DATA"
          <> help "Event data" )))
 
+sendEventsParser :: Parser CmdArgs
+sendEventsParser = pure $ SendEvents SendEventsArgs
+
 cmdArgsParser :: Parser CmdArgs
 cmdArgsParser = subparser
     (  (command "subscribe" (info (helper <*> subscribeParser) (progDesc "Subscribe to a stream")))
     <> (command "list-streams" (info (helper <*> listStreamsParser) (progDesc "List most recent streams")))
-    <> (command "send-event" (info (helper <*> createEventParser) (progDesc "Creates an event"))))
+    <> (command "send-event" (info (helper <*> createEventParser) (progDesc "Creates an event")))
+    <> (command "send-events" (info (helper <*> sendEventsParser) (progDesc "Sends events incrementally"))))
 
 data Opts
     = Opts
@@ -146,6 +159,7 @@ main = do
         Subscribe args -> runSubscribe conn (verbose opts) (pretty opts) args
         ListStreams args -> runListStreams conn args
         SendEvent args -> runSendEvent conn args
+        SendEvents args -> runSendEvents conn args
 
 
 runSubscribe :: Connection -> Bool -> Bool -> SubscribeArgs -> IO ()
@@ -208,6 +222,25 @@ runSendEvent conn args = do
         send evt = print =<< wait =<< sendEvent
                               conn
                               (StreamName $ sendEventArgsStreamName args)
+                              anyVersion
+                              evt
+                              Nothing
+
+runSendEvents :: Connection -> SendEventsArgs -> IO ()
+runSendEvents conn args = do
+    hSetBinaryMode stdin True
+    let input = BSS.hGetContents stdin
+    let stream = AES.decoded input
+    void $ iterT (\((x :: Value) :> m) ->
+        (send $ createEvent
+            (UserDefined $ "streamed-event")
+            Nothing
+            (withJson x)) >> m) stream
+
+    where
+        send evt = print =<< wait =<< sendEvent
+                              conn
+                              (StreamName $ "filippo-streaming-test")
                               anyVersion
                               evt
                               Nothing
