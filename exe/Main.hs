@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GADTs #-}
 
-import Database.EventStore (connect, defaultSettings, Settings(s_defaultUserCredentials), credentials, ConnectionType(Static), StreamId(StreamName), ResolveLink(ResolveLink, NoResolveLink), ResolvedEvent(resolvedEventRecord), RecordedEvent(recordedEventNumber, recordedEventId, recordedEventType, recordedEventData, recordedEventStreamId), positionEnd, streamEnd, s_loggerType, s_loggerFilter, LogLevel(LevelDebug), LoggerFilter(LoggerLevel), LogType(LogStderr), keepRetrying, s_retry, subscribe, nextEvent, Connection, readEventsBackward, ReadResult(ReadSuccess, ReadSuccess, ReadNoStream, ReadStreamDeleted, ReadNotModified, ReadError, ReadAccessDenied), Slice(Slice, SliceEndOfStream), subscribeFrom, eventNumber, Subscription, EventNumber, sendEvent, anyVersion, createEvent, EventType(UserDefined), withJson)
+import Database.EventStore (connect, defaultSettings, Settings(s_defaultUserCredentials), credentials, ConnectionType(Static), StreamId(StreamName), ResolveLink(ResolveLink, NoResolveLink), ResolvedEvent(resolvedEventRecord), RecordedEvent(recordedEventNumber, recordedEventId, recordedEventType, recordedEventData, recordedEventStreamId), positionEnd, streamEnd, s_loggerType, s_loggerFilter, LogLevel(LevelDebug), LoggerFilter(LoggerLevel), LogType(LogStderr), keepRetrying, s_retry, subscribe, nextEvent, Connection, readEventsBackward, ReadResult(ReadSuccess, ReadSuccess, ReadNoStream, ReadStreamDeleted, ReadNotModified, ReadError, ReadAccessDenied), Slice(Slice, SliceEndOfStream), subscribeFrom, eventNumber, Subscription, EventNumber, sendEvent, anyVersion, createEvent, EventType(UserDefined), withJson, withBinary)
 import Numeric.Natural (Natural)
 import Data.Int (Int32)
 import Data.ByteString.Lazy (ByteString)
@@ -21,7 +21,7 @@ import Control.Concurrent.Async (wait)
 
 data SubscribeArgs = SubscribeArgs { subscribeArgsStreamName :: Text, subscribeArgsFromEvent :: Maybe Natural, subscribeArgsChunkSize :: Maybe Int32 }
 data ListStreamsArgs = ListStreamsArgs { listStreamArgsCount :: Int, listStreamsShowAll :: Bool, listStreamsUpdated :: Bool }
-data SendEventArgs = SendEventArgs { sendEventArgsStreamName :: Text, sendEventArgsEventType :: Text, sendEventArgsEventData :: ByteString }
+data SendEventArgs = SendEventArgs { sendEventArgsStreamName :: Text, sendEventArgsEventType :: Text, sendEventArgsJsonData :: Maybe ByteString, sendEventArgsBinaryData :: Maybe ByteString }
 
 data CmdArgs
     = Subscribe SubscribeArgs
@@ -69,9 +69,16 @@ createEventParser = SendEvent <$> (SendEventArgs
      <*> argument str
           ( metavar "EVENT_TYPE"
          <> help "Event type" )
-     <*> argument str
-          ( metavar "DATA"
-         <> help "Event data" ))
+     <*> optional (strOption
+          ( short 'j'
+         <> long "json-data"
+         <> metavar "JSON"
+         <> help "Event data in JSON format" ))
+     <*> optional (strOption
+          ( short 'b'
+         <> long "binary-data"
+         <> metavar "DATA"
+         <> help "Event data" )))
 
 cmdArgsParser :: Parser CmdArgs
 cmdArgsParser = subparser
@@ -179,23 +186,31 @@ runListStreams conn args = case (listStreamsShowAll args, listStreamsUpdated arg
 
 runSendEvent :: Connection -> SendEventArgs -> IO ()
 runSendEvent conn args = do
-    case decode $ sendEventArgsEventData args of
-        Nothing -> error "Invalid json data"
-        Just (d :: Value) -> do
-            let evt = createEvent
-                          (UserDefined $ sendEventArgsEventType args)
-                          Nothing
-                          (withJson d)
+    case (sendEventArgsJsonData args, sendEventArgsBinaryData args) of
+        (Just _, Just _) -> error "-b and -j cannot be supplied together"
+        (Nothing, Nothing) -> error "Either -b or -j must be supplied"
+        (Just j, Nothing) ->
+              case decode j of
+                  Nothing -> error "Invalid json data"
+                  Just (d :: Value) -> do
+                      send $ createEvent
+                                    (UserDefined $ sendEventArgsEventType args)
+                                    Nothing
+                                    (withJson d)
+        (Nothing, Just d) ->
+              send $ createEvent
+                            (UserDefined $ sendEventArgsEventType args)
+                            Nothing
+                            (withBinary $ toStrict d)
 
-            wr <- wait =<< sendEvent
+
+    where
+        send evt = print =<< wait =<< sendEvent
                               conn
                               (StreamName $ sendEventArgsStreamName args)
                               anyVersion
                               evt
                               Nothing
-
-            print wr
-
 
 logRecordedEvent :: Bool -> RecordedEvent -> IO ()
 logRecordedEvent ptty re = if ptty then logPretty else logCondensed

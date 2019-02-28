@@ -65,12 +65,14 @@ Available options:
 ### `send-event`
 
 ```
-Usage: event-store-ctl send-event STREAM_NAME EVENT_TYPE DATA
+Usage: event-store-ctl send-event STREAM_NAME EVENT_TYPE [-j|--json-data JSON]
+                                  [-b|--binary-data DATA]
   Creates an event
 
 Available options:
   -h,--help                Show this help text
   STREAM_NAME              Name of stream to send the event to
   EVENT_TYPE               Event type
-  DATA                     Event data
+  -j,--json-data JSON      Event data in JSON format
+  -b,--binary-data DATA    Event data
 ```
