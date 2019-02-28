@@ -5,6 +5,7 @@
 import Database.EventStore (connect, defaultSettings, Settings(s_defaultUserCredentials), credentials, ConnectionType(Static), StreamId(StreamName), ResolveLink(ResolveLink, NoResolveLink), ResolvedEvent(resolvedEventRecord), RecordedEvent(recordedEventNumber, recordedEventId, recordedEventType, recordedEventData, recordedEventStreamId), positionEnd, streamEnd, s_loggerType, s_loggerFilter, LogLevel(LevelDebug), LoggerFilter(LoggerLevel), LogType(LogStderr), keepRetrying, s_retry, subscribe, nextEvent, Connection, readEventsBackward, ReadResult(ReadSuccess, ReadSuccess, ReadNoStream, ReadStreamDeleted, ReadNotModified, ReadError, ReadAccessDenied), Slice(Slice, SliceEndOfStream), subscribeFrom, eventNumber, Subscription, EventNumber, sendEvent, anyVersion, createEvent, EventType(UserDefined), withJson)
 import Numeric.Natural (Natural)
 import Data.Int (Int32)
+import Data.ByteString.Lazy (ByteString)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8)
@@ -20,7 +21,7 @@ import Control.Concurrent.Async (wait)
 
 data SubscribeArgs = SubscribeArgs { subscribeArgsStreamName :: Text, subscribeArgsFromEvent :: Maybe Natural, subscribeArgsChunkSize :: Maybe Int32 }
 data ListStreamsArgs = ListStreamsArgs { listStreamArgsCount :: Int, listStreamsShowAll :: Bool, listStreamsUpdated :: Bool }
-data SendEventArgs = SendEventArgs { sendEventArgsStreamName :: Text, sendEventArgsEventType :: Text, sendEventArgsEventData :: Text }
+data SendEventArgs = SendEventArgs { sendEventArgsStreamName :: Text, sendEventArgsEventType :: Text, sendEventArgsEventData :: ByteString }
 
 data CmdArgs
     = Subscribe SubscribeArgs
@@ -178,19 +179,22 @@ runListStreams conn args = case (listStreamsShowAll args, listStreamsUpdated arg
 
 runSendEvent :: Connection -> SendEventArgs -> IO ()
 runSendEvent conn args = do
-    let evt = createEvent
-                  (UserDefined $ sendEventArgsEventType args)
-                  Nothing
-                  (withJson $ sendEventArgsEventData args)
+    case decode $ sendEventArgsEventData args of
+        Nothing -> error "Invalid json data"
+        Just (d :: Value) -> do
+            let evt = createEvent
+                          (UserDefined $ sendEventArgsEventType args)
+                          Nothing
+                          (withJson d)
 
-    wr <- wait =<< sendEvent
-                      conn
-                      (StreamName $ sendEventArgsStreamName args)
-                      anyVersion
-                      evt
-                      Nothing
+            wr <- wait =<< sendEvent
+                              conn
+                              (StreamName $ sendEventArgsStreamName args)
+                              anyVersion
+                              evt
+                              Nothing
 
-    print wr
+            print wr
 
 
 logRecordedEvent :: Bool -> RecordedEvent -> IO ()
