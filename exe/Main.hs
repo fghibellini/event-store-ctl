@@ -11,7 +11,7 @@ import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8)
 import Data.Monoid ((<>))
 import Control.Monad (forever, when, mapM_, void)
-import Data.Aeson (decode, Value)
+import Data.Aeson (decode, Value, FromJSON(parseJSON), withObject, (.:), (.:?))
 import Data.Aeson.Encode.Pretty (encodePretty)
 import Data.Maybe (fromMaybe)
 import Data.ByteString.Lazy (toStrict, fromStrict)
@@ -22,7 +22,6 @@ import GHC.IO.Handle.FD (stdin)
 import GHC.IO.Handle (hSetBinaryMode)
 import qualified Data.ByteString.Streaming as BSS
 import qualified Data.ByteString.Streaming.Aeson as AES
---import Data.Functor.Of (Of((:>)))
 import Streaming.Prelude (Of((:>)))
 import Streaming (iterT)
 
@@ -226,21 +225,31 @@ runSendEvent conn args = do
                               evt
                               Nothing
 
+data InputEvent = InputEvent { inputEventStream :: Maybe Text, inputEventEventName :: Maybe Text, inputEventData :: Value }
+
+instance FromJSON InputEvent where
+    parseJSON = withObject "Event" $ \v -> InputEvent
+        <$> v .:? "stream"
+        <*> v .:? "event-name"
+        <*> v .:  "data"
+
 runSendEvents :: Connection -> SendEventsArgs -> IO ()
 runSendEvents conn args = do
     hSetBinaryMode stdin True
     let input = BSS.hGetContents stdin
     let stream = AES.decoded input
-    void $ iterT (\((x :: Value) :> m) ->
-        (send $ createEvent
-            (UserDefined $ "streamed-event")
-            Nothing
-            (withJson x)) >> m) stream
+    void $ iterT (\((x :: InputEvent) :> m) -> handleRecord x >> m) stream
 
     where
-        send evt = print =<< wait =<< sendEvent
+        handleRecord :: InputEvent -> IO ()
+        handleRecord evt = send (fromMaybe "filippo-streaming-test" (inputEventStream evt)) $ createEvent
+            (UserDefined $ fromMaybe "streamed-event" (inputEventEventName evt))
+            Nothing
+            (withJson $ inputEventData evt)
+
+        send streamName evt = print =<< wait =<< sendEvent
                               conn
-                              (StreamName $ "filippo-streaming-test")
+                              (StreamName $ streamName)
                               anyVersion
                               evt
                               Nothing
