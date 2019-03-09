@@ -65,14 +65,59 @@ Available options:
 ### `send-event`
 
 ```
-Usage: event-store-ctl send-event STREAM_NAME EVENT_TYPE [-j|--json-data JSON]
-                                  [-b|--binary-data DATA]
+Usage: event-store-ctl send-event [-s|--stream STREAM_NAME]
+                                  [-t|--type EVENT_TYPE] [-p|--payload DATA]
+                                  [-b|--binary] [--output-template]
   Creates an event
 
 Available options:
   -h,--help                Show this help text
-  STREAM_NAME              Name of stream to send the event to
-  EVENT_TYPE               Event type
-  -j,--json-data JSON      Event data in JSON format
-  -b,--binary-data DATA    Event data
+  -s,--stream STREAM_NAME  Name of stream to send the event to
+  -t,--type EVENT_TYPE     Event type
+  -p,--payload DATA        Event data passed as argument instead of STDIN
+  -b,--binary              Payload is binary data
+  --output-template        Output a template of an expected JSON input
+```
+
+#### Examples
+
+##### JSON
+
+```
+event-store-ctl send-event <<EOF
+{
+  "stream": "child#1",
+  "type": "first-steps",
+  "payload": {
+    "numberOfSteps": 3,
+    "durationInSeconds": 7.2
+  }
+}
+EOF
+```
+
+```
+WriteResult {writeNextExpectedVersion = 3, writePosition = Position {positionCommit = 2715108, positionPrepare = 2715108}}
+```
+
+##### Binary
+
+```
+$ event-store-ctl send-event -b <<EOF
+child#1:first-steps:(numberOfSteps,3):(durationInSeconds:7.2)
+EOF
+```
+
+```
+WriteResult {writeNextExpectedVersion = 3, writePosition = Position {positionCommit = 2715108, positionPrepare = 2715108}}
+```
+
+##### Binary as argument
+
+```
+$ event-store-ctl send-event -b -d 'child#1:first-steps:(numberOfSteps,3):(durationInSeconds:7.2)'
+```
+
+```
+WriteResult {writeNextExpectedVersion = 3, writePosition = Position {positionCommit = 2715108, positionPrepare = 2715108}}
 ```

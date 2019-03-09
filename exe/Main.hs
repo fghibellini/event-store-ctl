@@ -2,10 +2,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GADTs #-}
 
-import Database.EventStore (connect, defaultSettings, Settings(s_defaultUserCredentials), credentials, ConnectionType(Static), StreamId(StreamName), ResolveLink(ResolveLink, NoResolveLink), ResolvedEvent(resolvedEventRecord), RecordedEvent(recordedEventNumber, recordedEventId, recordedEventType, recordedEventData, recordedEventStreamId), positionEnd, streamEnd, s_loggerType, s_loggerFilter, LogLevel(LevelDebug), LoggerFilter(LoggerLevel), LogType(LogStderr), keepRetrying, s_retry, subscribe, nextEvent, Connection, readEventsBackward, ReadResult(ReadSuccess, ReadSuccess, ReadNoStream, ReadStreamDeleted, ReadNotModified, ReadError, ReadAccessDenied), Slice(Slice, SliceEndOfStream), subscribeFrom, eventNumber, Subscription, EventNumber, sendEvent, anyVersion, createEvent, EventType(UserDefined), withJson, withBinary)
+import Database.EventStore (connect, defaultSettings, Settings(s_defaultUserCredentials), credentials, ConnectionType(Static), StreamId(StreamName), ResolveLink(ResolveLink, NoResolveLink), ResolvedEvent(resolvedEventRecord), RecordedEvent(recordedEventNumber, recordedEventId, recordedEventType, recordedEventData, recordedEventStreamId), positionEnd, streamEnd, s_loggerType, s_loggerFilter, LogLevel(LevelDebug), LoggerFilter(LoggerLevel), LogType(LogStderr), keepRetrying, s_retry, subscribe, nextEvent, Connection, readEventsBackward, ReadResult(ReadSuccess, ReadSuccess, ReadNoStream, ReadStreamDeleted, ReadNotModified, ReadError, ReadAccessDenied), Slice(Slice, SliceEndOfStream), subscribeFrom, eventNumber, Subscription, EventNumber, sendEvent, anyVersion, createEvent, EventType(UserDefined), withJson, withBinary, Event)
 import Numeric.Natural (Natural)
 import Data.Int (Int32)
-import Data.ByteString.Lazy (ByteString)
+import Data.ByteString.Lazy (ByteString, hGetContents)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8)
@@ -27,7 +27,7 @@ import Streaming (iterT)
 
 data SubscribeArgs = SubscribeArgs { subscribeArgsStreamName :: Text, subscribeArgsFromEvent :: Maybe Natural, subscribeArgsChunkSize :: Maybe Int32 }
 data ListStreamsArgs = ListStreamsArgs { listStreamArgsCount :: Int, listStreamsShowAll :: Bool, listStreamsUpdated :: Bool }
-data SendEventArgs = SendEventArgs { sendEventArgsStreamName :: Text, sendEventArgsEventType :: Text, sendEventArgsJsonData :: Maybe ByteString, sendEventArgsBinaryData :: Maybe ByteString }
+data SendEventArgs = SendEventArgs { sendEventArgsStreamName :: Maybe Text, sendEventArgsEventType :: Maybe Text, sendEventArgsPayload :: Maybe ByteString, sendEventArgsBinary :: Bool, sendEventArgsOutputTemplate :: Bool }
 data SendEventsArgs = SendEventsArgs
 
 data CmdArgs
@@ -71,22 +71,28 @@ listStreamsParser = ListStreams <$> (ListStreamsArgs
 
 createEventParser :: Parser CmdArgs
 createEventParser = SendEvent <$> (SendEventArgs
-     <$> argument str
-          ( metavar "STREAM_NAME"
-         <> help "Name of stream to send the event to" )
-     <*> argument str
-          ( metavar "EVENT_TYPE"
-         <> help "Event type" )
+     <$> optional (strOption
+          ( short 's'
+         <> long "stream"
+         <> metavar "STREAM_NAME"
+         <> help "Name of stream to send the event to" ))
      <*> optional (strOption
-          ( short 'j'
-         <> long "json-data"
-         <> metavar "JSON"
-         <> help "Event data in JSON format" ))
+          ( short 't'
+         <> long "type"
+         <> metavar "EVENT_TYPE"
+         <> help "Event type" ))
      <*> optional (strOption
-          ( short 'b'
-         <> long "binary-data"
+          ( short 'p'
+         <> long "payload"
          <> metavar "DATA"
-         <> help "Event data" )))
+         <> help "Event data passed as argument instead of STDIN" ))
+     <*> switch
+          ( short 'b'
+         <> long "binary"
+         <> help "Payload is binary data" )
+     <*> switch
+          ( long "output-template"
+         <> help "Output a template of an expected JSON input"))
 
 sendEventsParser :: Parser CmdArgs
 sendEventsParser = pure $ SendEvents SendEventsArgs
@@ -198,40 +204,65 @@ runListStreams conn args = case (listStreamsShowAll args, listStreamsUpdated arg
     (False, False) -> getNewStreams conn (listStreamArgsCount args)      >>= mapM_ (putStrLn . T.unpack)
 
 runSendEvent :: Connection -> SendEventArgs -> IO ()
-runSendEvent conn args = do
-    case (sendEventArgsJsonData args, sendEventArgsBinaryData args) of
-        (Just _, Just _) -> error "-b and -j cannot be supplied together"
-        (Nothing, Nothing) -> error "Either -b or -j must be supplied"
-        (Just j, Nothing) ->
-              case decode j of
-                  Nothing -> error "Invalid json data"
-                  Just (d :: Value) -> do
-                      send $ createEvent
-                                    (UserDefined $ sendEventArgsEventType args)
-                                    Nothing
-                                    (withJson d)
-        (Nothing, Just d) ->
-              send $ createEvent
-                            (UserDefined $ sendEventArgsEventType args)
-                            Nothing
-                            (withBinary $ toStrict d)
+runSendEvent conn args | sendEventArgsOutputTemplate args = putStrLn (T.unpack eventTemplate)
+runSendEvent conn args | otherwise = do
 
+    -- 1. fetch input ByteString
+    d <- case sendEventArgsPayload args of
+        Just p -> pure p
+        Nothing -> readPayloadStdIn
+
+    -- 2. create an event from the input
+    let (stream, evt) = case sendEventArgsBinary args of
+                                True -> case sendEventArgsEventType args of
+                                              Nothing -> error "Event type not specified"
+                                              Just evtType ->
+                                                  let evt = createEvent
+                                                              (UserDefined $ evtType)
+                                                              Nothing
+                                                              (withBinary $ toStrict d)
+                                                  in (Nothing, evt)
+                                False ->
+                                      case decode d of
+                                          Nothing -> error "Invalid input (couldn't parse JSON see --output-template)"
+                                          Just (d :: InputEvent) ->
+                                              let evtType = case (sendEventArgsEventType args, inputEventEventName d) of
+                                                                    (Nothing, Nothing) -> error "Event type not specified"
+                                                                    (_, Just x) -> x
+                                                                    (Just x, Nothing) -> x
+                                                  evt = createEvent
+                                                            (UserDefined evtType)
+                                                            Nothing
+                                                            (withJson $ inputEventData d)
+                                              in (inputEventStream d, evt)
+
+    let sname = case (defaultStream, stream) of
+                (Nothing, Nothing) -> error "Stream name not specified"
+                (_, Just x) -> x
+                (Just x, Nothing) -> x
+
+    -- 3. send the event
+    send sname evt
 
     where
-        send evt = print =<< wait =<< sendEvent
-                              conn
-                              (StreamName $ sendEventArgsStreamName args)
-                              anyVersion
-                              evt
-                              Nothing
+        defaultStream = sendEventArgsStreamName args
+
+        send :: Text -> Event -> IO ()
+        send stream evt = do
+            print =<< wait =<< sendEvent
+                                  conn
+                                  (StreamName stream)
+                                  anyVersion
+                                  evt
+                                  Nothing
 
 data InputEvent = InputEvent { inputEventStream :: Maybe Text, inputEventEventName :: Maybe Text, inputEventData :: Value }
 
 instance FromJSON InputEvent where
     parseJSON = withObject "Event" $ \v -> InputEvent
         <$> v .:? "stream"
-        <*> v .:? "event-name"
-        <*> v .:  "data"
+        <*> v .:? "type"
+        <*> v .:  "payload"
 
 runSendEvents :: Connection -> SendEventsArgs -> IO ()
 runSendEvents conn args = do
@@ -264,4 +295,21 @@ logRecordedEvent ptty re = if ptty then logPretty else logCondensed
 
         logCondensed = do
             putStrLn $ T.unpack $ decodeUtf8 $ recordedEventData $ re
+
+eventTemplate :: Text
+eventTemplate = T.intercalate "\n"
+    [ "{"
+    ,  "  \"stream\": \"<stream_name>\","
+    ,  "  \"type\": \"<event_type>\","
+    ,  "  \"payload\": {"
+    ,  "    \"prop1\": \"val1\","
+    ,  "    \"prop2\": \"val2\""
+    ,  "  }"
+    ,  "}"
+    ]
+
+readPayloadStdIn :: IO ByteString
+readPayloadStdIn = do
+    hSetBinaryMode stdin True
+    hGetContents stdin
 
