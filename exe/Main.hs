@@ -23,12 +23,13 @@ import GHC.IO.Handle (hSetBinaryMode)
 import qualified Data.ByteString.Streaming as BSS
 import qualified Data.ByteString.Streaming.Aeson as AES
 import Streaming.Prelude (Of((:>)))
+import qualified Streaming.Prelude as SP
 import Streaming (iterT)
 
 data SubscribeArgs = SubscribeArgs { subscribeArgsStreamName :: Text, subscribeArgsFromEvent :: Maybe Natural, subscribeArgsChunkSize :: Maybe Int32 }
 data ListStreamsArgs = ListStreamsArgs { listStreamArgsCount :: Int, listStreamsShowAll :: Bool, listStreamsUpdated :: Bool }
 data SendEventArgs = SendEventArgs { sendEventArgsStreamName :: Maybe Text, sendEventArgsEventType :: Maybe Text, sendEventArgsPayload :: Maybe ByteString, sendEventArgsBinary :: Bool, sendEventArgsOutputTemplate :: Bool }
-data SendEventsArgs = SendEventsArgs
+data SendEventsArgs = SendEventsArgs { sendEventsArgsStreamName :: Maybe Text, sendEventsArgsEventType :: Maybe Text, sendEventsArgsBinary :: Maybe Text }
 
 data CmdArgs
     = Subscribe SubscribeArgs
@@ -95,7 +96,21 @@ createEventParser = SendEvent <$> (SendEventArgs
          <> help "Output a template of an expected JSON input"))
 
 sendEventsParser :: Parser CmdArgs
-sendEventsParser = pure $ SendEvents SendEventsArgs
+sendEventsParser = SendEvents <$> (SendEventsArgs
+     <$> optional (strOption
+          ( short 's'
+         <> long "stream"
+         <> metavar "STREAM_NAME"
+         <> help "Name of stream to send the event to" ))
+     <*> optional (strOption
+          ( short 't'
+         <> long "type"
+         <> metavar "EVENT_TYPE"
+         <> help "Event type" ))
+     <*> optional (strOption
+          ( short 'b'
+         <> long "binary"
+         <> help "Signals that inputs will be binary data and the argument whould be used as separator" )))
 
 cmdArgsParser :: Parser CmdArgs
 cmdArgsParser = subparser
@@ -269,12 +284,20 @@ runSendEvents conn args = do
     hSetBinaryMode stdin True
     let input = BSS.hGetContents stdin
     let stream = AES.decoded input
-    void $ iterT (\((x :: InputEvent) :> m) -> handleRecord x >> m) stream
+    void $ SP.mapM_ handleRecord stream
 
     where
+        evtNm dft (Just x) = x
+        evtNm (Just x) Nothing = x
+        evtNm Nothing Nothing = error "Event type not specified"
+
+        evtStrm dft (Just x) = x
+        evtStrm (Just x) Nothing = x
+        evtStrm Nothing Nothing = error "Event stream not specified"
+
         handleRecord :: InputEvent -> IO ()
-        handleRecord evt = send (fromMaybe "filippo-streaming-test" (inputEventStream evt)) $ createEvent
-            (UserDefined $ fromMaybe "streamed-event" (inputEventEventName evt))
+        handleRecord evt = send (evtStrm (sendEventsArgsStreamName args) (inputEventStream evt)) $ createEvent
+            (UserDefined $ evtNm (sendEventsArgsEventType args) (inputEventEventName evt))
             Nothing
             (withJson $ inputEventData evt)
 
