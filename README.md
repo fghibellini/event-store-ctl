@@ -25,6 +25,7 @@ Available commands:
   subscribe                Subscribe to a stream
   list-streams             List most recent streams
   send-event               Creates an event
+  send-events              Sends events incrementally
 ```
 
 ## Commands
@@ -79,45 +80,20 @@ Available options:
   --output-template        Output a template of an expected JSON input
 ```
 
-#### Examples
-
-##### JSON
+### `send-events`
 
 ```
-event-store-ctl send-event <<EOF
-{
-  "stream": "child#1",
-  "type": "first-steps",
-  "payload": {
-    "numberOfSteps": 3,
-    "durationInSeconds": 7.2
-  }
-}
-EOF
+Usage: event-store-ctl send-events [-s|--stream STREAM_NAME]
+                                   [-t|--type EVENT_TYPE] [-b|--binary ARG]
+  Sends events incrementally
+
+Available options:
+  -h,--help                Show this help text
+  -s,--stream STREAM_NAME  Name of stream to send the event to
+  -t,--type EVENT_TYPE     Event type
+  -b,--binary ARG          Signals that inputs will be binary data and the
+                           argument whould be used as separator (currently a
+                           number is interpreted as ASCII value - use 10 as
+                           newline - TODO accept multibyte bytestrings)
 ```
 
-```
-WriteResult {writeNextExpectedVersion = 3, writePosition = Position {positionCommit = 2715108, positionPrepare = 2715108}}
-```
-
-##### Binary
-
-```
-$ event-store-ctl send-event -b <<EOF
-child#1:first-steps:(numberOfSteps,3):(durationInSeconds:7.2)
-EOF
-```
-
-```
-WriteResult {writeNextExpectedVersion = 3, writePosition = Position {positionCommit = 2715108, positionPrepare = 2715108}}
-```
-
-##### Binary as argument
-
-```
-$ event-store-ctl send-event -b -d 'child#1:first-steps:(numberOfSteps,3):(durationInSeconds:7.2)'
-```
-
-```
-WriteResult {writeNextExpectedVersion = 3, writePosition = Position {positionCommit = 2715108, positionPrepare = 2715108}}
-```

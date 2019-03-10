@@ -14,6 +14,7 @@ import Control.Monad (forever, when, mapM_, void)
 import Data.Aeson (decode, Value, FromJSON(parseJSON), withObject, (.:), (.:?))
 import Data.Aeson.Encode.Pretty (encodePretty)
 import Data.Maybe (fromMaybe)
+import qualified Data.ByteString as BS
 import Data.ByteString.Lazy (toStrict, fromStrict)
 import Options.Applicative (ParserInfo, Parser, subparser, command, info, progDesc, helper, (<**>), fullDesc, header, execParser, strOption, long, metavar, help, argument, str, showDefault, value, option, switch, auto, short, optional)
 import Streams (getActiveStreams, getNewStreams, getModifiedStreams)
@@ -24,7 +25,7 @@ import qualified Data.ByteString.Streaming as BSS
 import qualified Data.ByteString.Streaming.Aeson as AES
 import Streaming.Prelude (Of((:>)), mapped)
 import qualified Streaming.Prelude as SP
-import Streaming (iterT)
+import Streaming (iterT, maps, Stream)
 import Data.Word (Word8)
 
 data SubscribeArgs = SubscribeArgs { subscribeArgsStreamName :: Text, subscribeArgsFromEvent :: Maybe Natural, subscribeArgsChunkSize :: Maybe Int32 }
@@ -111,7 +112,7 @@ sendEventsParser = SendEvents <$> (SendEventsArgs
      <*> optional (option auto
           ( short 'b'
          <> long "binary"
-         <> help "Signals that inputs will be binary data and the argument whould be used as separator" )))
+         <> help "Signals that inputs will be binary data and the argument whould be used as separator (currently a number is interpreted as ASCII value - use 10 as newline - TODO accept multibyte bytestrings)" )))
 
 cmdArgsParser :: Parser CmdArgs
 cmdArgsParser = subparser
@@ -287,7 +288,7 @@ runSendEvents conn args = do
 
     case sendEventsArgsBinary args of
         Just delimiter -> do
-            let stream = mapped BSS.toStrict $ BSS.splitWith (==delimiter) $ input
+            let stream = mapped BSS.toStrict $ BSS.denull $ BSS.splitWith (==delimiter) $ input
             let (Just sname) = sendEventsArgsStreamName args
             let (Just evtName) = sendEventsArgsEventType args
             let mkEvt payload = createEvent
@@ -348,4 +349,3 @@ readPayloadStdIn :: IO ByteString
 readPayloadStdIn = do
     hSetBinaryMode stdin True
     hGetContents stdin
-
