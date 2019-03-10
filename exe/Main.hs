@@ -22,14 +22,15 @@ import GHC.IO.Handle.FD (stdin)
 import GHC.IO.Handle (hSetBinaryMode)
 import qualified Data.ByteString.Streaming as BSS
 import qualified Data.ByteString.Streaming.Aeson as AES
-import Streaming.Prelude (Of((:>)))
+import Streaming.Prelude (Of((:>)), mapped)
 import qualified Streaming.Prelude as SP
 import Streaming (iterT)
+import Data.Word (Word8)
 
 data SubscribeArgs = SubscribeArgs { subscribeArgsStreamName :: Text, subscribeArgsFromEvent :: Maybe Natural, subscribeArgsChunkSize :: Maybe Int32 }
 data ListStreamsArgs = ListStreamsArgs { listStreamArgsCount :: Int, listStreamsShowAll :: Bool, listStreamsUpdated :: Bool }
 data SendEventArgs = SendEventArgs { sendEventArgsStreamName :: Maybe Text, sendEventArgsEventType :: Maybe Text, sendEventArgsPayload :: Maybe ByteString, sendEventArgsBinary :: Bool, sendEventArgsOutputTemplate :: Bool }
-data SendEventsArgs = SendEventsArgs { sendEventsArgsStreamName :: Maybe Text, sendEventsArgsEventType :: Maybe Text, sendEventsArgsBinary :: Maybe Text }
+data SendEventsArgs = SendEventsArgs { sendEventsArgsStreamName :: Maybe Text, sendEventsArgsEventType :: Maybe Text, sendEventsArgsBinary :: Maybe Word8 }
 
 data CmdArgs
     = Subscribe SubscribeArgs
@@ -107,7 +108,7 @@ sendEventsParser = SendEvents <$> (SendEventsArgs
          <> long "type"
          <> metavar "EVENT_TYPE"
          <> help "Event type" ))
-     <*> optional (strOption
+     <*> optional (option auto
           ( short 'b'
          <> long "binary"
          <> help "Signals that inputs will be binary data and the argument whould be used as separator" )))
@@ -283,8 +284,20 @@ runSendEvents :: Connection -> SendEventsArgs -> IO ()
 runSendEvents conn args = do
     hSetBinaryMode stdin True
     let input = BSS.hGetContents stdin
-    let stream = AES.decoded input
-    void $ SP.mapM_ handleRecord stream
+
+    case sendEventsArgsBinary args of
+        Just delimiter -> do
+            let stream = mapped BSS.toStrict $ BSS.splitWith (==delimiter) $ input
+            let (Just sname) = sendEventsArgsStreamName args
+            let (Just evtName) = sendEventsArgsEventType args
+            let mkEvt payload = createEvent
+                                    (UserDefined evtName)
+                                    Nothing
+                                    (withBinary payload)
+            void $ SP.mapM_ (send sname . mkEvt) stream
+        Nothing -> do
+            let stream = AES.decoded input
+            void $ SP.mapM_ handleRecord stream
 
     where
         evtNm dft (Just x) = x
